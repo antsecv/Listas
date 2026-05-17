@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String          @id @default(cuid())
+  name          String
+  email         String          @unique
+  passwordHash  String
+  role          UserRole        @default(SOLICITANTE)
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  shoppingLists ShoppingList[]
+  templates     Template[]
+  reviewedShoppingListItems ShoppingListItem[] @relation("ShoppingListItemReviewedBy")
+  purchasedShoppingListItems ShoppingListItem[] @relation("ShoppingListItemPurchasedBy")
+  statusUpdatedShoppingLists ShoppingList[] @relation("ShoppingListStatusUpdatedBy")
+}
+
+enum UserRole {
+  ADMIN
+  SOLICITANTE
+  COMPRADOR
+}
+
+model ShoppingList {
+  id              String             @id @default(cuid())
+  name            String
+  status          ShoppingListStatus @default(BORRADOR)
+  authorId        String
+  author          User               @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  statusUpdatedAt DateTime?
+  statusUpdatedById String?
+  statusUpdatedBy  User?              @relation("ShoppingListStatusUpdatedBy", fields: [statusUpdatedById], references: [id], onDelete: SetNull)
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+  items           ShoppingListItem[]
+
+  @@index([authorId, createdAt])
+}
+
+enum ShoppingListStatus {
+  BORRADOR
+  EN_REVISION
+  EN_COMPRA
+  DESPACHADA
+  CANCELADA
+}
+
+enum ReviewStatus {
+  PENDIENTE
+  REVISADO
+  OMITIDO
+}
+
+enum PurchaseStatus {
+  PENDIENTE_COMPRA
+  COMPRADO
+  NO_REQUIERE
+  NO_DISPONIBLE
+}
+
+model ShoppingListItem {
+  id             String        @id @default(cuid())
+  shoppingListId  String
+  shoppingList    ShoppingList  @relation(fields: [shoppingListId], references: [id], onDelete: Cascade)
+  name           String
+  minimumStock   Int
+  maximumStock   Int
+  currentStock   Int
+  reviewStatus   ReviewStatus  @default(PENDIENTE)
+  purchaseStatus PurchaseStatus @default(PENDIENTE_COMPRA)
+  omitReason     String?
+  reviewedAt     DateTime?
+  reviewedById   String?
+  reviewedBy     User?         @relation("ShoppingListItemReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  purchasedAt    DateTime?
+  purchasedById  String?
+  purchasedBy    User?         @relation("ShoppingListItemPurchasedBy", fields: [purchasedById], references: [id], onDelete: SetNull)
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([shoppingListId])
+}
+
+model Template {
+  id         String        @id @default(cuid())
+  name       String
+  authorId   String
+  author     User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+  items      TemplateItem[]
+
+  @@index([authorId, createdAt])
+}
+
+model TemplateItem {
+  id            String   @id @default(cuid())
+  templateId    String
+  template      Template @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  name          String
+  minimumStock  Int
+  maximumStock  Int
+  currentStock  Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([templateId])
+}
