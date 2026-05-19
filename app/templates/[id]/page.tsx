@@ -10,8 +10,9 @@ import {
 import { prisma } from "@/lib/prisma";
 import { requireAdmin } from "@/lib/session";
 import { AutoSaveNumberField } from "@/components/auto-save-number-field";
-import { calculateQuantityToBuy, getBuyQuantityClass } from "@/lib/shopping";
+import { calculateQuantityToBuy, getPurchaseCostModeLabel, purchaseCostModeValues } from "@/lib/shopping";
 import { EditItemModal } from "@/components/edit-item-modal";
+import { QuantityToBuyBadge } from "@/components/quantity-to-buy-badge";
 
 type RouteParams = Promise<{ id: string }>;
 type SearchParams = Promise<{ error?: string; success?: string }>;
@@ -35,7 +36,7 @@ export default async function TemplateDetailPage({ params, searchParams }: { par
         <div>
           <h1 className="title">{template.name}</h1>
           <p className="subtitle">
-            ID: {template.id} · Autor: {template.author.name} · Creada: {template.createdAt.toLocaleString("es-ES")}
+            ID: {template.id} · Autor: {template.author.name} · Modo: {getPurchaseCostModeLabel(template.purchaseCostMode)} · Creada: {template.createdAt.toLocaleString("es-ES")}
           </p>
         </div>
         <div className="row">
@@ -56,7 +57,17 @@ export default async function TemplateDetailPage({ params, searchParams }: { par
           <label htmlFor="name">Nombre de la plantilla</label>
           <input id="name" name="name" type="text" defaultValue={template.name} required />
         </div>
-        <button type="submit" className="button">Guardar nombre</button>
+        <div className="field">
+          <label htmlFor="purchaseCostMode">Modo de compra</label>
+          <select id="purchaseCostMode" name="purchaseCostMode" defaultValue={template.purchaseCostMode}>
+            {purchaseCostModeValues.map((mode) => (
+              <option key={mode} value={mode}>
+                {getPurchaseCostModeLabel(mode)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button type="submit" className="button">Guardar cambios</button>
       </form>
 
       <div className="card stack">
@@ -83,17 +94,25 @@ export default async function TemplateDetailPage({ params, searchParams }: { par
                     <td data-label="Mínimo">{item.minimumStock}</td>
                     <td data-label="Máximo">{item.maximumStock}</td>
                     <td data-label="Actual">
-                      <form id={`template-stock-${item.id}`} action={updateTemplateItemAction} className="inline-table-form">
-                        <input type="hidden" name="templateId" value={template.id} />
-                        <input type="hidden" name="itemId" value={item.id} />
-                        <input type="hidden" name="name" value={item.name} />
-                        <input type="hidden" name="minimumStock" value={item.minimumStock} />
-                        <input type="hidden" name="maximumStock" value={item.maximumStock} />
-                        <AutoSaveNumberField formId={`template-stock-${item.id}`} name="currentStock" defaultValue={item.currentStock} className="inline-number" />
-                      </form>
+                      <AutoSaveNumberField
+                        endpoint={`/api/templates/${template.id}/items/${item.id}/current-stock`}
+                        name="currentStock"
+                        defaultValue={item.currentStock}
+                        className="inline-number"
+                        eventName="template-item-stock-saved"
+                        eventDetail={{ templateId: template.id, itemId: item.id }}
+                      />
                     </td>
                     <td data-label="A comprar">
-                      <span className={`badge ${getBuyQuantityClass(buy)}`}>{buy}</span>
+                      <QuantityToBuyBadge
+                        eventName="template-item-stock-saved"
+                        scopeKey="templateId"
+                        scopeId={template.id}
+                        itemId={item.id}
+                        currentStock={item.currentStock}
+                        minimumStock={item.minimumStock}
+                        maximumStock={item.maximumStock}
+                      />
                     </td>
                     <td data-label="Acciones">
                       <EditItemModal title={`Editar ${item.name}`}>

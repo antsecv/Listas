@@ -221,6 +221,15 @@ textarea {
   flex-wrap: wrap;
 }
 
+.auto-save-field {
+  display: grid;
+  gap: 4px;
+}
+
+.auto-save-status {
+  min-height: 1em;
+}
+
 .inline-number {
   width: 92px;
   padding: 8px 10px;

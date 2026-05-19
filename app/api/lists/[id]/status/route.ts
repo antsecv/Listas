@@ -1,21 +1,27 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { revalidatePath } from "next/cache";
+import { getToken } from "next-auth/jwt";
 import { prisma } from "@/lib/prisma";
 import { canChangeListStatus } from "@/lib/permissions";
 import { shoppingListStatusValues } from "@/lib/shopping";
+import type { UserRole } from "@prisma/client";
 
 type RouteContext = {
   params: Promise<{ id: string }>;
 };
 
 export async function POST(request: Request, context: RouteContext) {
-  const session = await auth();
+  const token = await getToken({ req: request, secret: process.env.AUTH_SECRET });
+  const userId = String(token?.sub ?? "");
+  const role = String(token?.role ?? "") as UserRole;
 
-  if (!session?.user?.id) {
+  if (!userId || !role) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
-  if (!canChangeListStatus(session.user)) {
+  const sessionUser = { id: userId, role };
+
+  if (!canChangeListStatus(sessionUser)) {
     return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
   }
 
@@ -33,14 +39,21 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Lista no encontrada" }, { status: 404 });
   }
 
-  if (session.user.role === "COMPRADOR" && list.status === "BORRADOR") {
+  if (role === "COMPRADOR" && list.status === "BORRADOR") {
     return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
   }
 
   await prisma.shoppingList.update({
     where: { id },
-    data: { status: status as (typeof shoppingListStatusValues)[number] }
+    data: {
+      status: status as (typeof shoppingListStatusValues)[number],
+      statusUpdatedAt: new Date(),
+      statusUpdatedById: userId
+    }
   });
+
+  revalidatePath("/lists");
+  revalidatePath(`/lists/${id}`);
 
   return NextResponse.json({ ok: true });
 }

@@ -1,7 +1,8 @@
 "use client";
 
-import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { getPurchaseStatusClass, getShoppingListStatusClass } from "@/lib/shopping";
+import type { PurchaseStatus, ShoppingListStatus } from "@/lib/shopping";
 
 type Option = {
   value: string;
@@ -16,10 +17,20 @@ type AutoSubmitSelectProps = {
   ariaLabel: string;
   options: Option[];
   fieldName?: string;
+  statusKind?: "shopping-list" | "purchase";
+  eventName?: string;
+  eventDetail?: Record<string, unknown>;
 };
 
-export function AutoSubmitSelect({ endpoint, name, defaultValue, className, ariaLabel, options, fieldName = name }: AutoSubmitSelectProps) {
-  const router = useRouter();
+function getStatusClassName(kind: AutoSubmitSelectProps["statusKind"], value: string) {
+  if (kind === "purchase") {
+    return getPurchaseStatusClass(value as PurchaseStatus);
+  }
+
+  return getShoppingListStatusClass(value as ShoppingListStatus);
+}
+
+export function AutoSubmitSelect({ endpoint, name, defaultValue, className, ariaLabel, options, fieldName = name, statusKind, eventName, eventDetail }: AutoSubmitSelectProps) {
   const [saving, setSaving] = useState(false);
   const [value, setValue] = useState(defaultValue);
 
@@ -27,7 +38,7 @@ export function AutoSubmitSelect({ endpoint, name, defaultValue, className, aria
     <select
       name={name}
       value={value}
-      className={className}
+      className={[className, statusKind ? getStatusClassName(statusKind, value) : null].filter(Boolean).join(" ")}
       aria-label={ariaLabel}
       disabled={saving}
       onChange={async (event) => {
@@ -42,6 +53,7 @@ export function AutoSubmitSelect({ endpoint, name, defaultValue, className, aria
             headers: {
               "Content-Type": "application/json"
             },
+            credentials: "include",
             body: JSON.stringify({ [fieldName]: nextStatus })
           });
 
@@ -50,7 +62,19 @@ export function AutoSubmitSelect({ endpoint, name, defaultValue, className, aria
             throw new Error(data?.error ?? "No se pudo guardar el estado.");
           }
 
-          router.refresh();
+          const data = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+
+          if (eventName) {
+            window.dispatchEvent(
+              new CustomEvent(eventName, {
+                detail: {
+                  ...(eventDetail ?? {}),
+                  ...(data ?? {}),
+                  [fieldName]: nextStatus
+                }
+              })
+            );
+          }
         } catch (error) {
           setValue(previousStatus);
           alert(error instanceof Error ? error.message : "No se pudo guardar el estado.");

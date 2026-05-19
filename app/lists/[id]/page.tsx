@@ -10,20 +10,25 @@ import {
   updateShoppingListItemAction
 } from "@/app/actions";
 import { AutoSubmitSelect } from "@/components/auto-submit-select";
-import { AutoSaveNumberField } from "@/components/auto-save-number-field";
+import { AutoSaveDecimalField } from "@/components/auto-save-decimal-field";
+import { AutoSaveStockField } from "@/components/auto-save-stock-field";
 import { EditItemModal } from "@/components/edit-item-modal";
+import { ReviewCompletionGate } from "@/components/review-completion-gate";
+import { ReviewStatusBadge } from "@/components/review-status-badge";
+import { PurchaseItemFields } from "@/components/purchase-item-fields";
+import { QuantityToBuyBadge } from "@/components/quantity-to-buy-badge";
+import { ShoppingListLiveSummary } from "@/components/shopping-list-live-summary";
 import { prisma } from "@/lib/prisma";
-import { canEditList, canManagePurchases, canReviewProducts, canViewList } from "@/lib/permissions";
+import { canEditList, canManagePurchases, canViewList } from "@/lib/permissions";
 import { requireUser } from "@/lib/session";
 import {
   calculateQuantityToBuy,
-  getBuyQuantityClass,
+  getPurchaseCostModeLabel,
   getPurchaseStatusClass,
   getPurchaseStatusLabel,
-  getReviewStatusLabel,
   getShoppingListStatusLabel,
+  formatDecimal,
   purchaseStatusValues,
-  reviewStatusValues
 } from "@/lib/shopping";
 
 type RouteParams = Promise<{ id: string }>;
@@ -49,15 +54,7 @@ export default async function ListDetailPage({ params, searchParams }: { params:
 
   const editable = canEditList(user, list);
   const purchasable = canManagePurchases(user, list);
-  const reviewEditable = canReviewProducts(user, list);
   const viewMode = String(resolvedSearchParams?.view ?? (purchasable ? "to-buy" : "all")).toLowerCase();
-
-  const reviewDone = list.items.filter((item) => item.reviewStatus !== "PENDIENTE").length;
-  const reviewTotal = list.items.length;
-  const purchaseRelevant = list.items.filter((item) => item.purchaseStatus !== "NO_REQUIERE").length;
-  const purchaseDone = list.items.filter(
-    (item) => item.purchaseStatus === "COMPRADO" || item.purchaseStatus === "NO_DISPONIBLE" || item.purchaseStatus === "NO_REQUIERE"
-  ).length;
 
   const visibleItems = list.items.filter((item) => {
     if (!purchasable) {
@@ -87,13 +84,7 @@ export default async function ListDetailPage({ params, searchParams }: { params:
     return true;
   });
 
-  const totalToBuy = list.items.reduce(
-    (sum, item) => sum + calculateQuantityToBuy(item.currentStock, item.minimumStock, item.maximumStock),
-    0
-  );
-
-  const pendingReview = list.items.filter((item) => item.reviewStatus === "PENDIENTE").length;
-  const canSendToReview = editable && list.status === "BORRADOR" && pendingReview === 0;
+  const pendingReviewItemIds = list.items.filter((item) => item.reviewStatus === "PENDIENTE").map((item) => item.id);
 
   return (
     <div className="grid" style={{ gap: 20 }}>
@@ -101,7 +92,7 @@ export default async function ListDetailPage({ params, searchParams }: { params:
         <div>
           <h1 className="title">{list.name}</h1>
           <p className="subtitle">
-            ID: {list.id} · Autor: {list.author.name} · Estado: {getShoppingListStatusLabel(list.status)} · Creada: {list.createdAt.toLocaleString("es-ES")}
+            ID: {list.id} · Autor: {list.author.name} · Estado: {getShoppingListStatusLabel(list.status)} · Modo: {getPurchaseCostModeLabel(list.purchaseCostMode)} · Creada: {list.createdAt.toLocaleString("es-ES")}
           </p>
         </div>
         <div className="row">
@@ -122,23 +113,28 @@ export default async function ListDetailPage({ params, searchParams }: { params:
       {resolvedSearchParams?.error ? <div className="error">{resolvedSearchParams.error}</div> : null}
       {resolvedSearchParams?.success ? <div className="notice">{resolvedSearchParams.success}</div> : null}
 
-      <div className="grid grid-3">
-        <div className="card">
-          <div className="muted">Revisión</div>
-          <h2>{reviewDone}/{reviewTotal}</h2>
-          <p className="muted">Productos revisados</p>
+      {list.observations ? (
+        <div className="card stack">
+          <div className="muted">Observaciones para compra</div>
+          <div>{list.observations}</div>
         </div>
-        <div className="card">
-          <div className="muted">Compra</div>
-          <h2>{purchaseDone}/{purchaseRelevant}</h2>
-          <p className="muted">Productos resueltos</p>
-        </div>
-        <div className="card">
-          <div className="muted">A comprar</div>
-          <h2>{totalToBuy}</h2>
-          <p className="muted">Cantidad total sugerida</p>
-        </div>
-      </div>
+      ) : null}
+
+      <ShoppingListLiveSummary
+        listId={list.id}
+        initialItems={list.items.map((item) => ({
+          id: item.id,
+          currentStock: item.currentStock,
+          minimumStock: item.minimumStock,
+          maximumStock: item.maximumStock,
+          reviewStatus: item.reviewStatus,
+          purchaseStatus: item.purchaseStatus,
+          purchasedQuantity: item.purchasedQuantity === null ? null : Number(item.purchasedQuantity),
+          purchaseCost: item.purchaseCost === null ? null : Number(item.purchaseCost)
+        }))}
+        purchaseCostMode={list.purchaseCostMode}
+        initialPurchaseTotalCost={list.purchaseTotalCost === null ? 0 : Number(list.purchaseTotalCost)}
+      />
 
       {editable ? (
         <>
@@ -148,45 +144,70 @@ export default async function ListDetailPage({ params, searchParams }: { params:
               <label htmlFor="name">Nombre de la lista</label>
               <input id="name" name="name" type="text" defaultValue={list.name} required />
             </div>
+            <div className="field">
+              <label htmlFor="observations">Observaciones para compra</label>
+              <textarea
+                id="observations"
+                name="observations"
+                rows={4}
+                defaultValue={list.observations ?? ""}
+                placeholder="Indica pedidos especiales, marcas o condiciones de compra"
+              />
+            </div>
             <div className="row">
-              <button type="submit" className="button">Guardar nombre</button>
+              <button type="submit" className="button">Guardar cambios</button>
             </div>
           </form>
 
-          {canSendToReview ? (
-            <form action={sendShoppingListToReviewAction} className="card form">
-              <input type="hidden" name="listId" value={list.id} />
-              <button type="submit" className="button secondary">
-                Enviar a revisión
-              </button>
-            </form>
-          ) : list.status === "BORRADOR" ? (
-            <div className="card">
-              <span className="muted">Faltan {pendingReview} productos por revisar</span>
-            </div>
-          ) : null}
+          <ReviewCompletionGate
+            listId={list.id}
+            pendingItemIds={pendingReviewItemIds}
+            visible={editable && list.status === "BORRADOR"}
+            sendAction={sendShoppingListToReviewAction}
+          />
         </>
       ) : null}
 
       {purchasable ? (
-        <form className="card form" method="get">
-          <div className="grid grid-3">
-            <div className="field">
-              <label htmlFor="view">Vista</label>
-              <select id="view" name="view" defaultValue={viewMode}>
-                <option value="all">Todos</option>
-                <option value="to-buy">Por comprar</option>
-                <option value="purchased">Comprados</option>
-                <option value="no-required">No requieren compra</option>
-                <option value="unavailable">No disponibles</option>
-              </select>
+        <>
+          {list.purchaseCostMode === "TOTAL_LISTA" ? (
+            <div className="card form">
+              <div className="field">
+                <label htmlFor="purchaseTotalCost">Valor total de compra</label>
+                <AutoSaveDecimalField
+                  endpoint={`/api/lists/${list.id}/purchase-total`}
+                  fieldName="purchaseTotalCost"
+                  defaultValue={list.purchaseTotalCost ? Number(list.purchaseTotalCost) : null}
+                  step="0.01"
+                  inputMode="decimal"
+                  className="inline-number"
+                  ariaLabel="Valor total de compra"
+                  eventName="shopping-list-purchase-total-saved"
+                  eventDetail={{ listId: list.id }}
+                />
+              </div>
             </div>
-          </div>
-          <div className="row">
-            <button type="submit" className="button">Filtrar</button>
-            <Link href={`/lists/${list.id}`} className="button secondary">Limpiar</Link>
-          </div>
-        </form>
+          ) : null}
+
+          <form className="card form" method="get">
+            <div className="grid grid-3">
+              <div className="field">
+                <label htmlFor="view">Vista</label>
+                <select id="view" name="view" defaultValue={viewMode}>
+                  <option value="all">Todos</option>
+                  <option value="to-buy">Por comprar</option>
+                  <option value="purchased">Comprados</option>
+                  <option value="no-required">No requieren compra</option>
+                  <option value="unavailable">No disponibles</option>
+                </select>
+              </div>
+            </div>
+            <div className="row">
+              <button type="submit" className="button">Filtrar</button>
+              <Link href={`/lists/${list.id}`} className="button secondary">Limpiar</Link>
+            </div>
+          </form>
+        </>
       ) : null}
 
       <div className="card stack">
@@ -203,6 +224,8 @@ export default async function ListDetailPage({ params, searchParams }: { params:
                 <th>Revisión</th>
                 <th>Compra</th>
                 <th>A comprar</th>
+                <th>Comprado</th>
+                {list.purchaseCostMode === "POR_PRODUCTO" ? <th>Costo</th> : null}
                 <th>Acciones</th>
               </tr>
             </thead>
@@ -222,22 +245,22 @@ export default async function ListDetailPage({ params, searchParams }: { params:
                     <td data-label="Máximo">{item.maximumStock}</td>
                     <td data-label="Actual">
                       {editable ? (
-                        <form id={`list-stock-${item.id}`} action={updateShoppingListItemAction} className="inline-table-form">
-                          <input type="hidden" name="listId" value={list.id} />
-                          <input type="hidden" name="itemId" value={item.id} />
-                          <input type="hidden" name="name" value={item.name} />
-                          <input type="hidden" name="minimumStock" value={item.minimumStock} />
-                          <input type="hidden" name="maximumStock" value={item.maximumStock} />
-                          <AutoSaveNumberField formId={`list-stock-${item.id}`} name="currentStock" defaultValue={item.currentStock} className="inline-number" />
-                        </form>
+                        <AutoSaveStockField
+                          endpoint={`/api/lists/${list.id}/items/${item.id}/current-stock`}
+                          listId={list.id}
+                          itemId={item.id}
+                          defaultValue={item.reviewStatus === "PENDIENTE" && item.currentStock === 0 ? null : item.currentStock}
+                          minimumStock={item.minimumStock}
+                          maximumStock={item.maximumStock}
+                          className="inline-number"
+                          ariaLabel={`Existencia actual de ${item.name}`}
+                        />
                       ) : (
                         <span>{item.currentStock}</span>
                       )}
                     </td>
                     <td data-label="Revisión">
-                      <span className={`badge ${getPurchaseStatusClass(item.reviewStatus === "OMITIDO" ? "NO_REQUIERE" : item.purchaseStatus)}`}>
-                        {getReviewStatusLabel(item.reviewStatus)}
-                      </span>
+                      <ReviewStatusBadge listId={list.id} itemId={item.id} initialStatus={item.reviewStatus} />
                     </td>
                     <td data-label="Compra">
                       {purchasable ? (
@@ -245,8 +268,11 @@ export default async function ListDetailPage({ params, searchParams }: { params:
                           endpoint={`/api/lists/${list.id}/items/${item.id}/purchase-status`}
                           name="purchaseStatus"
                           defaultValue={item.purchaseStatus}
-                          className={`badge status-select ${getPurchaseStatusClass(item.purchaseStatus)}`}
+                          className="badge status-select"
                           ariaLabel={`Compra de ${item.name}`}
+                          statusKind="purchase"
+                          eventName="shopping-list-purchase-status-saved"
+                          eventDetail={{ listId: list.id, itemId: item.id }}
                           options={purchaseStatusValues.map((status) => ({
                             value: status,
                             label: getPurchaseStatusLabel(status)
@@ -257,8 +283,38 @@ export default async function ListDetailPage({ params, searchParams }: { params:
                       )}
                     </td>
                     <td data-label="A comprar">
-                      <span className={`badge ${getBuyQuantityClass(buy)}`}>{buy}</span>
+                      <QuantityToBuyBadge
+                        eventName="shopping-list-stock-saved"
+                        scopeKey="listId"
+                        scopeId={list.id}
+                        itemId={item.id}
+                        currentStock={item.currentStock}
+                        minimumStock={item.minimumStock}
+                        maximumStock={item.maximumStock}
+                      />
                     </td>
+                    {purchasable ? (
+                      <PurchaseItemFields
+                        listId={list.id}
+                        itemId={item.id}
+                        itemName={item.name}
+                        initialPurchaseStatus={item.purchaseStatus}
+                        initialPurchasedQuantity={item.purchasedQuantity === null ? null : Number(item.purchasedQuantity)}
+                        initialPurchaseCost={item.purchaseCost === null ? null : Number(item.purchaseCost)}
+                        purchaseCostMode={list.purchaseCostMode}
+                      />
+                    ) : (
+                      <>
+                        <td data-label="Comprado">
+                          <span>{item.purchasedQuantity ? formatDecimal(Number(item.purchasedQuantity), 3) : "—"}</span>
+                        </td>
+                        {list.purchaseCostMode === "POR_PRODUCTO" ? (
+                          <td data-label="Costo">
+                            <span>{item.purchaseCost ? formatDecimal(Number(item.purchaseCost), 2) : "—"}</span>
+                          </td>
+                        ) : null}
+                      </>
+                    )}
                     <td data-label="Acciones">
                       {editable ? (
                         <EditItemModal title={`Editar ${item.name}`}>

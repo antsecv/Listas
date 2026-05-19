@@ -11,7 +11,9 @@ import { requireAdmin } from "@/lib/session";
 import {
   calculateQuantityToBuy,
   derivePurchaseStatus,
+  parseNonNegativeDecimal,
   getNextShoppingListStatus,
+  purchaseCostModeValues,
   purchaseStatusValues,
   reviewStatusValues,
   shoppingListStatusValues,
@@ -122,6 +124,8 @@ export async function createShoppingListAction(formData: FormData) {
       status: "BORRADOR",
       statusUpdatedAt: new Date(),
       statusUpdatedById: user.id,
+      purchaseCostMode: template?.purchaseCostMode ?? "TOTAL_LISTA",
+      purchaseTotalCost: null,
       items: template
         ? {
             create: template.items.map((item) => ({
@@ -130,7 +134,9 @@ export async function createShoppingListAction(formData: FormData) {
               maximumStock: item.maximumStock,
               currentStock: item.currentStock,
               reviewStatus: "PENDIENTE",
-              purchaseStatus: derivePurchaseStatus(item.currentStock, item.minimumStock)
+              purchaseStatus: derivePurchaseStatus(item.currentStock, item.minimumStock),
+              purchasedQuantity: null,
+              purchaseCost: null
             }))
           }
         : undefined
@@ -188,7 +194,11 @@ export async function updateShoppingListStatusAction(formData: FormData) {
 
   await prisma.shoppingList.update({
     where: { id: listId },
-    data: { status: status as (typeof shoppingListStatusValues)[number] }
+    data: {
+      status: status as (typeof shoppingListStatusValues)[number],
+      statusUpdatedAt: new Date(),
+      statusUpdatedById: user.id
+    }
   });
 
   revalidatePath("/lists");
@@ -201,6 +211,7 @@ export async function updateShoppingListAction(formData: FormData) {
   const user = await requireUser();
   const listId = String(formData.get("listId") ?? "").trim();
   const name = String(formData.get("name") ?? "").trim();
+  const observations = String(formData.get("observations") ?? "").trim();
 
   if (!listId || !name) {
     redirect(errPath("/lists", "Datos incompletos para actualizar la lista."));
@@ -216,7 +227,10 @@ export async function updateShoppingListAction(formData: FormData) {
     redirect(errPath(`/lists/${listId}`, "No tienes permiso para editar esta lista."));
   }
 
-  await prisma.shoppingList.update({ where: { id: listId }, data: { name } });
+  await prisma.shoppingList.update({
+    where: { id: listId },
+    data: { name, observations: observations || null }
+  });
   revalidatePath("/lists");
   revalidatePath(`/lists/${listId}`);
   redirect(okPath(`/lists/${listId}`, "Lista actualizada."));
@@ -473,16 +487,107 @@ export async function sendShoppingListToReviewAction(formData: FormData) {
   redirect(okPath(`/lists/${listId}`, "Lista enviada a revisión."));
 }
 
+export async function updateShoppingListPurchaseTotalAction(formData: FormData) {
+  const user = await requireUser();
+  const listId = String(formData.get("listId") ?? "").trim();
+
+  if (!listId) {
+    redirect(errPath("/lists", "No se pudo guardar el total de compra."));
+  }
+
+  const list = await prisma.shoppingList.findFirst({ where: { id: listId } });
+
+  if (!list) {
+    redirect(errPath("/lists", "La lista no existe."));
+  }
+
+  if (!canManagePurchases(user, list)) {
+    redirect(errPath(`/lists/${listId}`, "No tienes permiso para editar la compra."));
+  }
+
+  if (list.purchaseCostMode !== "TOTAL_LISTA") {
+    redirect(errPath(`/lists/${listId}`, "Esta lista usa costo por producto."));
+  }
+
+  try {
+    const purchaseTotalCost = parseNonNegativeDecimal(formData.get("purchaseTotalCost"));
+
+    await prisma.shoppingList.update({
+      where: { id: listId },
+      data: { purchaseTotalCost }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "No se pudo guardar el total de compra.";
+    redirect(errPath(`/lists/${listId}`, message));
+  }
+
+  revalidatePath(`/lists/${listId}`);
+  redirect(okPath(`/lists/${listId}`, "Total de compra actualizado."));
+}
+
+export async function updateShoppingListItemPurchaseAction(formData: FormData) {
+  const user = await requireUser();
+  const listId = String(formData.get("listId") ?? "").trim();
+  const itemId = String(formData.get("itemId") ?? "").trim();
+
+  if (!listId || !itemId) {
+    redirect(errPath(`/lists/${listId || ""}`, "No se pudo guardar la compra del producto."));
+  }
+
+  const list = await prisma.shoppingList.findFirst({ where: { id: listId } });
+
+  if (!list) {
+    redirect(errPath(`/lists/${listId}`, "La lista no existe."));
+  }
+
+  if (!canManagePurchases(user, list)) {
+    redirect(errPath(`/lists/${listId}`, "No tienes permiso para editar la compra."));
+  }
+
+  const item = await prisma.shoppingListItem.findFirst({ where: { id: itemId, shoppingListId: listId } });
+
+  if (!item) {
+    redirect(errPath(`/lists/${listId}`, "El producto no existe."));
+  }
+
+  try {
+    const purchasedQuantity = parseNonNegativeDecimal(formData.get("purchasedQuantity"));
+    const purchaseCost = list.purchaseCostMode === "POR_PRODUCTO"
+      ? parseNonNegativeDecimal(formData.get("purchaseCost"))
+      : null;
+
+    await prisma.shoppingListItem.update({
+      where: { id: itemId },
+      data: {
+        purchasedQuantity,
+        purchaseCost
+      }
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "No se pudo guardar la compra del producto.";
+    redirect(errPath(`/lists/${listId}`, message));
+  }
+
+  revalidatePath(`/lists/${listId}`);
+  redirect(okPath(`/lists/${listId}`, "Compra del producto actualizada."));
+}
+
 export async function createTemplateAction(formData: FormData) {
   const user = await requireAdmin();
   const id = randomUUID();
   const name = `Plantilla ${id.slice(0, 8)}`;
+  const purchaseCostMode = String(formData.get("purchaseCostMode") ?? "TOTAL_LISTA").trim();
+
+  if (!purchaseCostModeValues.includes(purchaseCostMode as (typeof purchaseCostModeValues)[number])) {
+    redirect(errPath("/templates/new", "El modo de compra no es válido."));
+  }
 
   const template = await prisma.template.create({
     data: {
       id,
       name,
-      authorId: user.id
+      authorId: user.id,
+      purchaseCostMode: purchaseCostMode as (typeof purchaseCostModeValues)[number]
     }
   });
 
@@ -495,6 +600,7 @@ export async function updateTemplateAction(formData: FormData) {
   const user = await requireAdmin();
   const templateId = String(formData.get("templateId") ?? "").trim();
   const name = String(formData.get("name") ?? "").trim();
+  const purchaseCostMode = String(formData.get("purchaseCostMode") ?? "").trim();
 
   if (!templateId || !name) {
     redirect(errPath("/templates", "Datos incompletos para actualizar la plantilla."));
@@ -506,7 +612,17 @@ export async function updateTemplateAction(formData: FormData) {
     redirect(errPath("/templates", "La plantilla no existe."));
   }
 
-  await prisma.template.update({ where: { id: templateId }, data: { name } });
+  if (!purchaseCostModeValues.includes(purchaseCostMode as (typeof purchaseCostModeValues)[number])) {
+    redirect(errPath(`/templates/${templateId}`, "El modo de compra no es válido."));
+  }
+
+  await prisma.template.update({
+    where: { id: templateId },
+    data: {
+      name,
+      purchaseCostMode: purchaseCostMode as (typeof purchaseCostModeValues)[number]
+    }
+  });
   revalidatePath("/templates");
   revalidatePath(`/templates/${templateId}`);
   redirect(okPath(`/templates/${templateId}`, "Plantilla actualizada."));

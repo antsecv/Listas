@@ -1,17 +1,21 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { revalidatePath } from "next/cache";
+import { getToken } from "next-auth/jwt";
 import { prisma } from "@/lib/prisma";
 import { canManagePurchases } from "@/lib/permissions";
 import { purchaseStatusValues } from "@/lib/shopping";
+import type { UserRole } from "@prisma/client";
 
 type RouteContext = {
   params: Promise<{ id: string; itemId: string }>;
 };
 
 export async function POST(request: Request, context: RouteContext) {
-  const session = await auth();
+  const token = await getToken({ req: request, secret: process.env.AUTH_SECRET });
+  const userId = String(token?.sub ?? "");
+  const role = String(token?.role ?? "") as UserRole;
 
-  if (!session?.user?.id) {
+  if (!userId || !role) {
     return NextResponse.json({ error: "No autorizado" }, { status: 401 });
   }
 
@@ -29,7 +33,9 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Lista no encontrada" }, { status: 404 });
   }
 
-  if (!canManagePurchases(session.user, list)) {
+  const sessionUser = { id: userId, role };
+
+  if (!canManagePurchases(sessionUser, list)) {
     return NextResponse.json({ error: "Sin permisos" }, { status: 403 });
   }
 
@@ -39,13 +45,24 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: "Producto no encontrado" }, { status: 404 });
   }
 
-  if (purchaseStatus === "COMPRADO" || purchaseStatus === "NO_DISPONIBLE") {
+  if (purchaseStatus === "COMPRADO") {
     await prisma.shoppingListItem.update({
       where: { id: itemId },
       data: {
         purchaseStatus: purchaseStatus as (typeof purchaseStatusValues)[number],
         purchasedAt: new Date(),
-        purchasedById: session.user.id
+        purchasedById: userId
+      }
+    });
+  } else if (purchaseStatus === "NO_DISPONIBLE") {
+    await prisma.shoppingListItem.update({
+      where: { id: itemId },
+      data: {
+        purchaseStatus: purchaseStatus as (typeof purchaseStatusValues)[number],
+        purchasedAt: new Date(),
+        purchasedById: userId,
+        purchasedQuantity: null,
+        purchaseCost: null
       }
     });
   } else if (purchaseStatus === "NO_REQUIERE") {
@@ -54,7 +71,9 @@ export async function POST(request: Request, context: RouteContext) {
       data: {
         purchaseStatus: purchaseStatus as (typeof purchaseStatusValues)[number],
         purchasedAt: null,
-        purchasedById: null
+        purchasedById: null,
+        purchasedQuantity: null,
+        purchaseCost: null
       }
     });
   } else {
@@ -63,10 +82,30 @@ export async function POST(request: Request, context: RouteContext) {
       data: {
         purchaseStatus: purchaseStatus as (typeof purchaseStatusValues)[number],
         purchasedAt: null,
-        purchasedById: null
+        purchasedById: null,
+        purchasedQuantity: null,
+        purchaseCost: null
       }
     });
   }
 
-  return NextResponse.json({ ok: true });
+  const updatedItem = await prisma.shoppingListItem.findFirst({
+    where: { id: itemId },
+    select: {
+      purchaseStatus: true,
+      purchasedQuantity: true,
+      purchaseCost: true
+    }
+  });
+
+  revalidatePath(`/lists/${id}`);
+
+  return NextResponse.json({
+    ok: true,
+    listId: id,
+    itemId,
+    purchaseStatus: updatedItem?.purchaseStatus ?? purchaseStatus,
+    purchasedQuantity: updatedItem?.purchasedQuantity === null ? null : Number(updatedItem?.purchasedQuantity ?? 0),
+    purchaseCost: updatedItem?.purchaseCost === null ? null : Number(updatedItem?.purchaseCost ?? 0)
+  });
 }

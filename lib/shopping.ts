@@ -12,11 +12,15 @@ export const reviewStatusValues = ["PENDIENTE", "REVISADO", "OMITIDO"] as const;
 
 export const purchaseStatusValues = ["PENDIENTE_COMPRA", "COMPRADO", "NO_REQUIERE", "NO_DISPONIBLE"] as const;
 
+export const purchaseCostModeValues = ["TOTAL_LISTA", "POR_PRODUCTO"] as const;
+
 export type ShoppingListStatus = (typeof shoppingListStatusValues)[number];
 
 export type ReviewStatus = (typeof reviewStatusValues)[number];
 
 export type PurchaseStatus = (typeof purchaseStatusValues)[number];
+
+export type PurchaseCostMode = (typeof purchaseCostModeValues)[number];
 
 export function getShoppingListStatusLabel(status: ShoppingListStatus) {
   switch (status) {
@@ -100,6 +104,15 @@ export function getPurchaseStatusClass(status: PurchaseStatus) {
   }
 }
 
+export function getPurchaseCostModeLabel(mode: PurchaseCostMode) {
+  switch (mode) {
+    case "TOTAL_LISTA":
+      return "Costo total de lista";
+    case "POR_PRODUCTO":
+      return "Costo por producto";
+  }
+}
+
 export function derivePurchaseStatus(currentStock: number, minimumStock: number, reviewStatus?: ReviewStatus): PurchaseStatus {
   if (reviewStatus === "OMITIDO") {
     return "NO_REQUIERE";
@@ -147,4 +160,27 @@ export function parseNonNegativeInt(value: FormDataEntryValue | null, fallback =
   }
 
   return parsed;
+}
+
+export function parseNonNegativeDecimal(value: FormDataEntryValue | null, fallback: number | null = null) {
+  const raw = String(value ?? "").trim();
+
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number(raw);
+
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    throw new Error("Los valores deben ser decimales no negativos.");
+  }
+
+  return parsed;
+}
+
+export function formatDecimal(value: number, maximumFractionDigits = 2) {
+  return value.toLocaleString("es-ES", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits
+  });
 }

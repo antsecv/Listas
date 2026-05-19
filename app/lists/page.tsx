@@ -171,8 +171,11 @@ export default async function ListsPage({ searchParams }: { searchParams?: Searc
                           endpoint={`/api/lists/${list.id}/status`}
                           name="status"
                           defaultValue={list.status ?? "BORRADOR"}
-                          className={`badge status-select ${getShoppingListStatusClass(list.status)}`}
+                          className="badge status-select"
                           ariaLabel={`Estado de ${list.id.slice(0, 8)}`}
+                          statusKind="shopping-list"
+                          eventName="shopping-list-status-saved"
+                          eventDetail={{ listId: list.id }}
                           options={shoppingListStatusValues.map((status) => ({
                             value: status,
                             label: getShoppingListStatusLabel(status)
